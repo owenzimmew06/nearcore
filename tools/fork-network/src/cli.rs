@@ -25,7 +25,7 @@ use near_primitives::trie_key::trie_key_parsers::parse_account_id_from_account_k
 use near_primitives::types::{
     AccountId, AccountInfo, Balance, BlockHeight, EpochId, NumBlocks, NumSeats, ShardId, StateRoot,
 };
-use near_primitives::version::{ProtocolVersion, PROTOCOL_VERSION};
+use near_primitives::version::{ProtocolFeature, ProtocolVersion, PROTOCOL_VERSION};
 use near_store::adapter::StoreAdapter;
 use near_store::db::RocksDB;
 use near_store::flat::{BlockInfo, FlatStorageManager, FlatStorageStatus};
@@ -541,7 +541,8 @@ impl ForkNetworkCommand {
         &self,
         first_version: ProtocolVersion,
         num_seats: &Option<NumSeats>,
-        new_boundary_account: &AccountId,
+        new_boundary_account_1: &AccountId,
+        new_boundary_account_2: &AccountId,
         home_dir: &Path,
     ) -> anyhow::Result<EpochConfig> {
         let epoch_config_dir = home_dir.join("epoch_configs");
@@ -566,10 +567,19 @@ impl ForkNetworkCommand {
             config.block_producer_kickout_threshold = 0;
             config.chunk_producer_kickout_threshold = 0;
             config.chunk_validator_only_kickout_threshold = 0;
-            if version == PROTOCOL_VERSION {
+            if version == ProtocolFeature::SimpleNightshadeV4.protocol_version() {
                 config.shard_layout = ShardLayout::derive_shard_layout(
                     &config.shard_layout,
-                    new_boundary_account.clone(),
+                    new_boundary_account_1.clone(),
+                );
+            } else if version == ProtocolFeature::SimpleNightshadeV4_1.protocol_version() {
+                config.shard_layout = ShardLayout::derive_shard_layout(
+                    &config.shard_layout,
+                    new_boundary_account_1.clone(),
+                );
+                config.shard_layout = ShardLayout::derive_shard_layout(
+                    &config.shard_layout,
+                    new_boundary_account_2.clone(),
                 );
             }
             new_epoch_configs.insert(version, Arc::new(config));
@@ -908,12 +918,16 @@ impl ForkNetworkCommand {
         near_config.genesis.config.epoch_length = epoch_length;
 
         // let boundary_account = "part".parse::<AccountId>().unwrap();
-        let boundary_account = "5urora".parse::<AccountId>().unwrap();
+        let boundary_account_1 = "409de3f5388e7b3cc9b15971ee61ad8f75332a6e7af949c34f6ca843807b2c82"
+            .parse::<AccountId>()
+            .unwrap();
+        let boundary_account_2 = "v2.ref-finance.near".parse::<AccountId>().unwrap();
 
         let epoch_config = self.override_epoch_configs(
             genesis_protocol_version,
             num_seats,
-            &boundary_account,
+            &boundary_account_1,
+            &boundary_account_2,
             home_dir,
         )?;
 

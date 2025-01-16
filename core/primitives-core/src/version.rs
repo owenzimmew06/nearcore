@@ -196,6 +196,7 @@ pub enum ProtocolFeature {
     ExcludeExistingCodeFromWitnessForCodeLen,
     /// Use the block height instead of the block hash to calculate the receipt ID.
     BlockHeightForReceiptId,
+    SimpleNightshadeV4_1,
 }
 
 impl ProtocolFeature {
@@ -261,6 +262,7 @@ impl ProtocolFeature {
             | ProtocolFeature::RejectBlocksWithOutdatedProtocolVersions
             | ProtocolFeature::FixChunkProducerStakingThreshold
             | ProtocolFeature::SimpleNightshadeV4 => 74,
+            ProtocolFeature::SimpleNightshadeV4_1 => 75,
 
             // This protocol version is reserved for use in resharding tests. An extra resharding
             // is simulated on top of the latest shard layout in production. Note that later
@@ -289,7 +291,7 @@ impl ProtocolFeature {
 }
 
 /// Current protocol version used on the mainnet with all stable features.
-const STABLE_PROTOCOL_VERSION: ProtocolVersion = 74;
+const STABLE_PROTOCOL_VERSION: ProtocolVersion = 75;
 
 // On nightly, pick big enough version to support all features.
 const NIGHTLY_PROTOCOL_VERSION: ProtocolVersion = 149;
