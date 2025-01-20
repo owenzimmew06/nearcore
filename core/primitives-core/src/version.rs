@@ -197,6 +197,7 @@ pub enum ProtocolFeature {
     /// Use the block height instead of the block hash to calculate the receipt ID.
     BlockHeightForReceiptId,
     SimpleNightshadeV4_1,
+    GlobalContracts,
 }
 
 impl ProtocolFeature {
@@ -282,6 +283,7 @@ impl ProtocolFeature {
             ProtocolFeature::ExcludeExistingCodeFromWitnessForCodeLen => 147,
             ProtocolFeature::BlockHeightForReceiptId => 149,
             // Place features that are not yet in Nightly below this line.
+            ProtocolFeature::GlobalContracts => 200,
         }
     }
 
