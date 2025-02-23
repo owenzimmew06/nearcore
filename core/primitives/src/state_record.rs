@@ -68,6 +68,11 @@ impl StateRecord {
         key: &[u8],
         value: Vec<u8>,
     ) -> Result<Option<StateRecord>, std::io::Error> {
+        let key_len = key.len();
+        let value_len = value.len();
+        tracing::info!(?key_len, ?value_len, "BOOM 1");
+        tracing::info!(key_zero=?key[0], "BOOM 2");
+
         Ok(match key[0] {
             col::ACCOUNT => Some(StateRecord::Account {
                 account_id: parse_account_id_from_account_key(key)?,
