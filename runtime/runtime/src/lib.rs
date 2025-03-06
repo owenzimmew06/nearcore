@@ -337,134 +337,58 @@ impl Runtime {
         signed_transaction: &SignedTransaction,
         _transaction_cost: &TransactionCost,
         stats: &mut ChunkApplyStatsV0,
-        pre_verified: Option<VerificationResult>,
+        pre_verified: VerificationResult,
     ) -> Result<(Receipt, ExecutionOutcomeWithId), InvalidTxError> {
         let span = tracing::Span::current();
         metrics::TRANSACTION_PROCESSED_TOTAL.inc();
-
-        match verify_and_charge_tx_ephemeral(
-            &apply_state.config,
-            state_update,
-            signed_transaction,
-            transaction_cost,
-            Some(apply_state.block_height),
+        state_update.commit(StateChangeCause::TransactionProcessing {
+            tx_hash: signed_transaction.get_hash(),
+        });
+        let transaction = &signed_transaction.transaction;
+        let receipt_id = create_receipt_id_from_transaction(
             apply_state.current_protocol_version,
-        ) {
-            Ok(verification_result) => {
-                metrics::TRANSACTION_PROCESSED_SUCCESSFULLY_TOTAL.inc();
-                commit_charging_for_tx(
-                    state_update,
-                    &signed_transaction.transaction,
-                    &verification_result.signer,
-                    &verification_result.access_key,
-                );
-                state_update.commit(StateChangeCause::TransactionProcessing {
-                    tx_hash: signed_transaction.get_hash(),
-                });
-                let transaction = &signed_transaction.transaction;
-                let receipt_id = create_receipt_id_from_transaction(
-                    apply_state.current_protocol_version,
-                    signed_transaction,
-                    &apply_state.prev_block_hash,
-                    &apply_state.block_hash,
-                    apply_state.block_height,
-                );
-                let receipt = Receipt::V0(ReceiptV0 {
-                    predecessor_id: transaction.signer_id().clone(),
-                    receiver_id: transaction.receiver_id().clone(),
-                    receipt_id,
-                    receipt: ReceiptEnum::Action(ActionReceipt {
-                        signer_id: transaction.signer_id().clone(),
-                        signer_public_key: transaction.public_key().clone(),
-                        gas_price: verification_result.receipt_gas_price,
-                        output_data_receivers: vec![],
-                        input_data_ids: vec![],
-                        actions: transaction.actions().to_vec(),
-                    }),
-                });
-                stats.balance.tx_burnt_amount = safe_add_balance(
-                    stats.balance.tx_burnt_amount,
-                    verification_result.burnt_amount,
-                )
+            signed_transaction,
+            &apply_state.prev_block_hash,
+            &apply_state.block_hash,
+            apply_state.block_height,
+        );
+        let receipt = Receipt::V0(ReceiptV0 {
+            predecessor_id: transaction.signer_id().clone(),
+            receiver_id: transaction.receiver_id().clone(),
+            receipt_id,
+            receipt: ReceiptEnum::Action(ActionReceipt {
+                signer_id: transaction.signer_id().clone(),
+                signer_public_key: transaction.public_key().clone(),
+                gas_price: pre_verified.receipt_gas_price,
+                output_data_receivers: vec![],
+                input_data_ids: vec![],
+                actions: transaction.actions().to_vec(),
+            }),
+        });
+        stats.balance.tx_burnt_amount =
+            safe_add_balance(stats.balance.tx_burnt_amount, pre_verified.burnt_amount)
                 .map_err(|_| InvalidTxError::CostOverflow)?;
-                let gas_burnt = verification_result.gas_burnt;
-                let compute_usage = verification_result.gas_burnt;
-                let outcome = ExecutionOutcomeWithId {
-                    id: signed_transaction.get_hash(),
-                    outcome: ExecutionOutcome {
-                        status: ExecutionStatus::SuccessReceiptId(*receipt.receipt_id()),
-                        logs: vec![],
-                        receipt_ids: vec![*receipt.receipt_id()],
-                        gas_burnt,
-                        // TODO(#8806): Support compute costs for actions. For now they match burnt gas.
-                        compute_usage: Some(compute_usage),
-                        tokens_burnt: verification_result.burnt_amount,
-                        executor_id: transaction.signer_id().clone(),
-                        // TODO: profile data is only counted in apply_action, which only happened at process_receipt
-                        // VerificationResult needs updates to incorporate profile data to support profile data of txns
-                        metadata: ExecutionMetadata::V1,
-                    },
-                };
-                span.record("gas_burnt", gas_burnt);
-                span.record("compute_usage", compute_usage);
-                Ok((receipt, outcome))
-            }
-            Err(e) => {
-                metrics::TRANSACTION_PROCESSED_FAILED_TOTAL.inc();
-                state_update.rollback();
-                Err(e)
-            }
-        // TODO: deconflict with the above
-        if let Some(verification_result) = pre_verified {
-            // ephemeral is already committed above
-            state_update.commit(StateChangeCause::TransactionProcessing {
-                tx_hash: signed_transaction.get_hash(),
-            });
-            let transaction = &signed_transaction.transaction;
-            let receipt_id = create_receipt_id_from_transaction(
-                apply_state.current_protocol_version,
-                signed_transaction,
-                &apply_state.prev_block_hash,
-                &apply_state.block_hash,
-                apply_state.block_height,
-            );
-            let receipt = Receipt::V0(ReceiptV0 {
-                predecessor_id: transaction.signer_id().clone(),
-                receiver_id: transaction.receiver_id().clone(),
-                receipt_id,
-                receipt: ReceiptEnum::Action(ActionReceipt {
-                    signer_id: transaction.signer_id().clone(),
-                    signer_public_key: transaction.public_key().clone(),
-                    gas_price: verification_result.receipt_gas_price,
-                    output_data_receivers: vec![],
-                    input_data_ids: vec![],
-                    actions: transaction.actions().to_vec(),
-                }),
-            });
-            stats.balance.tx_burnt_amount =
-                safe_add_balance(stats.balance.tx_burnt_amount, verification_result.burnt_amount)
-                    .map_err(|_| InvalidTxError::CostOverflow)?;
-            let gas_burnt = verification_result.gas_burnt;
-            let compute_usage = verification_result.gas_burnt;
-            let outcome_with_id = ExecutionOutcomeWithId {
-                id: signed_transaction.get_hash(),
-                outcome: ExecutionOutcome {
-                    status: ExecutionStatus::SuccessReceiptId(*receipt.receipt_id()),
-                    logs: vec![],
-                    receipt_ids: vec![*receipt.receipt_id()],
-                    gas_burnt,
-                    compute_usage: Some(compute_usage),
-                    tokens_burnt: verification_result.burnt_amount,
-                    executor_id: transaction.signer_id().clone(),
-                    metadata: ExecutionMetadata::V1,
-                },
-            };
-            span.record("gas_burnt", gas_burnt);
-            span.record("compute_usage", compute_usage);
-            Ok((receipt, outcome_with_id))
-        } else {
-            Err(InvalidTxError::InvalidTransactionVersion)
-        }
+        let gas_burnt = pre_verified.gas_burnt;
+        let compute_usage = pre_verified.gas_burnt;
+        let outcome = ExecutionOutcomeWithId {
+            id: signed_transaction.get_hash(),
+            outcome: ExecutionOutcome {
+                status: ExecutionStatus::SuccessReceiptId(*receipt.receipt_id()),
+                logs: vec![],
+                receipt_ids: vec![*receipt.receipt_id()],
+                gas_burnt,
+                // TODO(#8806): Support compute costs for actions. For now they match burnt gas.
+                compute_usage: Some(compute_usage),
+                tokens_burnt: pre_verified.burnt_amount,
+                executor_id: transaction.signer_id().clone(),
+                // TODO: profile data is only counted in apply_action, which only happened at process_receipt
+                // VerificationResult needs updates to incorporate profile data to support profile data of txns
+                metadata: ExecutionMetadata::V1,
+            },
+        };
+        span.record("gas_burnt", gas_burnt);
+        span.record("compute_usage", compute_usage);
+        Ok((receipt, outcome))
     }
 
     fn apply_action(
@@ -1165,13 +1089,10 @@ impl Runtime {
                 // Check if there is already a receipt that was postponed and was awaiting for the
                 // given data_id.
                 // If we don't have a postponed receipt yet, we don't need to do anything for now.
-                if let Some(receipt_id) = get(
-                    state_update,
-                    &TrieKey::PostponedReceiptId {
-                        receiver_id: account_id.clone(),
-                        data_id: data_receipt.data_id,
-                    },
-                )? {
+                if let Some(receipt_id) = get(state_update, &TrieKey::PostponedReceiptId {
+                    receiver_id: account_id.clone(),
+                    data_id: data_receipt.data_id,
+                })? {
                     // There is already a receipt that is awaiting for the just received data.
                     // Removing this pending data_id for the receipt from the state.
                     state_update.remove(TrieKey::PostponedReceiptId {
@@ -1179,10 +1100,10 @@ impl Runtime {
                         data_id: data_receipt.data_id,
                     });
                     // Checking how many input data items is pending for the receipt.
-                    let pending_data_count: u32 = get(
-                        state_update,
-                        &TrieKey::PendingDataCount { receiver_id: account_id.clone(), receipt_id },
-                    )?
+                    let pending_data_count: u32 = get(state_update, &TrieKey::PendingDataCount {
+                        receiver_id: account_id.clone(),
+                        receipt_id,
+                    })?
                     .ok_or_else(|| {
                         StorageError::StorageInconsistentState(
                             "pending data count should be in the state".to_string(),
@@ -1847,11 +1768,12 @@ impl Runtime {
             .into_par_iter()
             .map(|task| {
                 match verifier::verify_ephemeral_group(
+                    &apply_state.config,
+                    &state_update,
                     task.ephemeral,
                     &task.group,
                     Some(apply_state.block_height),
                     apply_state.current_protocol_version,
-                    &apply_state.config,
                 ) {
                     Ok((ephemeral, verified)) => Ok(GroupResult { ephemeral, verified }),
                     Err(e) => Err(e),
@@ -1869,6 +1791,8 @@ impl Runtime {
                     all_verified.extend(o.verified);
                 }
                 Err(e) => {
+                    // TODO: this only reports metric once per group, but it should be per tx
+                    metrics::TRANSACTION_PROCESSED_FAILED_TOTAL.inc();
                     Self::handle_invalid_transaction(
                         e,
                         &near_primitives::hash::CryptoHash::default(),
@@ -1892,7 +1816,7 @@ impl Runtime {
                 &st,
                 &cost,
                 &mut processing_state.stats,
-                Some(vr.clone()),
+                vr,
             );
             match outcome {
                 Ok((receipt, outcome_with_id)) => {
