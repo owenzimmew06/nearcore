@@ -28,7 +28,7 @@ use near_chunks::test_utils::SynchronousShardsManagerAdapter;
 use near_client::adversarial::Controls;
 use near_client::client_actor::ClientActorInner;
 use near_client::{
-    start_client, Client, ClientActor, PartialWitnessActor, PartialWitnessSenderForClient, StartClientResult, SyncStatus, TxRequestHandlerConfig, ViewClientActor, ViewClientActorInner
+    start_client, Client, ClientActor, PartialWitnessActor, PartialWitnessSenderForClient, StartClientResult, SyncStatus, TxRequestHandler, TxRequestHandlerConfig, ViewClientActor, ViewClientActorInner
 };
 use near_client::{TxRequestHandlerActor, spawn_tx_request_handler_actor};
 use near_crypto::{KeyType, PublicKey};
@@ -642,7 +642,7 @@ fn process_peer_manager_message_default(
                             .view_client_actor
                             .send(BlockHeadersRequest(hashes.clone()).with_span_context())
                             .then(move |response| {
-                                let response = response.unwrap();
+           let response = response.unwrap();
                                 match response {
                                     Some(headers) => {
                                         me.do_send(
@@ -1198,6 +1198,33 @@ pub fn setup_synchronous_shards_manager(
         Duration::hours(1),
     );
     SynchronousShardsManagerAdapter::new(shards_manager)
+}
+
+pub fn setup_tx_request_handler(
+    chain_genesis: ChainGenesis,
+    client: &Client,
+    epoch_manager: Arc<dyn EpochManagerAdapter>,
+    shard_tracker: ShardTracker,
+    runtime: Arc<dyn RuntimeAdapter>,
+    network_adapter: PeerManagerAdapter,
+)-> TxRequestHandler {
+    let client_config = ClientConfig::test(true, 10, 20, 0, false, false, true);
+    let config = TxRequestHandlerConfig {
+        handler_threads: 1,
+        tx_routing_height_horizon: client_config.tx_routing_height_horizon,
+        epoch_length: chain_genesis.epoch_length,
+        transaction_validity_period: chain_genesis.transaction_validity_period,
+    };
+
+    TxRequestHandler::new(
+        config,
+        client.chunk_producer.sharded_tx_pool.clone(),
+        epoch_manager,
+        shard_tracker,
+        client.validator_signer.clone(),
+        runtime,
+        network_adapter,
+    ).unwrap()
 }
 
 /// A multi-sender for both the client and network parts of the ShardsManager API.
