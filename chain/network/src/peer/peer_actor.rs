@@ -1067,7 +1067,7 @@ impl PeerActor {
                 }
                 PeerMessage::Transaction(transaction) => {
                     network_state
-                        .client
+                        .tx_processor
                         .send_async(ProcessTxRequest {
                             transaction,
                             is_forwarded: false,

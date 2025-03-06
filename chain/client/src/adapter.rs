@@ -21,7 +21,6 @@ pub fn client_sender_for_network(
         state_request_header: view_client_addr.clone().into_sender(),
         state_request_part: view_client_addr.clone().into_sender(),
         state_response: client_addr.clone().into_sender(),
-        transaction: client_addr.clone().into_sender(),
         tx_status_request: view_client_addr.clone().into_sender(),
         tx_status_response: view_client_addr.clone().into_sender(),
         announce_account: view_client_addr.into_sender(),

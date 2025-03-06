@@ -621,6 +621,17 @@ impl TestEnvBuilder {
                     )
                 })
                 .collect();
+        let tx_request_handlers = (0..num_clients)
+            .map(|i|{
+                    let network_adapter = network_adapters[i].clone();
+                    let partial_witness_adapter = partial_witness_adapters[i].clone();
+                    let shards_manager_adapter = shards_manager_adapters[i].clone();
+                    let epoch_manager = epoch_managers[i].clone();
+                    let shard_tracker = shard_trackers[i].clone();
+                    let runtime = runtimes[i].clone();
+                    let validator_signer = Arc::new(create_test_signer(clients[i].as_str()));
+                    // hierwasik
+            })
 
         TestEnv {
             clock,
@@ -631,6 +642,7 @@ impl TestEnvBuilder {
             partial_witness_adapters,
             shards_manager_adapters,
             clients,
+            tx_request_handlers,
             account_indices: AccountIndices(
                 self.clients
                     .into_iter()

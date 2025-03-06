@@ -149,6 +149,14 @@ pub struct OptimisticBlockMessage {
 #[derive(Clone, MultiSend, MultiSenderFrom, MultiSendMessage)]
 #[multi_send_message_derive(Debug)]
 #[multi_send_input_derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessTxSenderForNetwork {
+    pub transaction: AsyncSender<ProcessTxRequest, ProcessTxResponse>,
+}
+
+
+#[derive(Clone, MultiSend, MultiSenderFrom, MultiSendMessage)]
+#[multi_send_message_derive(Debug)]
+#[multi_send_input_derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientSenderForNetwork {
     pub tx_status_request: AsyncSender<TxStatusRequest, Option<Box<FinalExecutionOutcomeView>>>,
     pub tx_status_response: AsyncSender<TxStatusResponse, ()>,
@@ -156,7 +164,6 @@ pub struct ClientSenderForNetwork {
     pub state_request_part: AsyncSender<StateRequestPart, Option<StateResponse>>,
     pub state_response: AsyncSender<StateResponseReceived, ()>,
     pub block_approval: AsyncSender<BlockApproval, ()>,
-    pub transaction: AsyncSender<ProcessTxRequest, ProcessTxResponse>,
     pub block_request: AsyncSender<BlockRequest, Option<Box<Block>>>,
     pub block_headers_request: AsyncSender<BlockHeadersRequest, Option<Vec<BlockHeader>>>,
     pub block: AsyncSender<BlockResponse, ()>,

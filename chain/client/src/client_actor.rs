@@ -53,7 +53,7 @@ use near_epoch_manager::EpochManagerAdapter;
 use near_epoch_manager::shard_tracker::ShardTracker;
 use near_network::client::{
     BlockApproval, BlockHeadersResponse, BlockResponse, ChunkEndorsementMessage,
-    OptimisticBlockMessage, ProcessTxRequest, ProcessTxResponse, RecvChallenge, SetNetworkInfo,
+    OptimisticBlockMessage, RecvChallenge, SetNetworkInfo,
     StateResponseReceived,
 };
 use near_network::types::ReasonForBan;
@@ -506,13 +506,6 @@ impl Handler<NetworkAdversarialMessage> for ClientActorInner {
                 None
             }
         }
-    }
-}
-
-impl Handler<ProcessTxRequest> for ClientActorInner {
-    fn handle(&mut self, msg: ProcessTxRequest) -> ProcessTxResponse {
-        let ProcessTxRequest { transaction, is_forwarded, check_only } = msg;
-        self.client.process_tx(transaction, is_forwarded, check_only)
     }
 }
 
