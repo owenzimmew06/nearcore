@@ -28,8 +28,7 @@ use near_chunks::test_utils::SynchronousShardsManagerAdapter;
 use near_client::adversarial::Controls;
 use near_client::client_actor::ClientActorInner;
 use near_client::{
-    Client, ClientActor, PartialWitnessActor, PartialWitnessSenderForClient, StartClientResult,
-    SyncStatus, ViewClientActor, ViewClientActorInner, start_client,
+    start_client, Client, ClientActor, PartialWitnessActor, PartialWitnessSenderForClient, StartClientResult, SyncStatus, TxRequestHandlerConfig, ViewClientActor, ViewClientActorInner
 };
 use near_client::{TxRequestHandlerActor, spawn_tx_request_handler_actor};
 use near_crypto::{KeyType, PublicKey};
@@ -201,15 +200,20 @@ pub fn setup(
             resharding_sender.into_multi_sender(),
         );
 
+    let tx_processor_config = TxRequestHandlerConfig {
+        handler_threads: config.transaction_request_handler_threads,
+        tx_routing_height_horizon: config.tx_routing_height_horizon,
+        epoch_length: config.epoch_length,
+        transaction_validity_period,
+    };
+    
     let tx_processor_addr = spawn_tx_request_handler_actor(
-        clock.clone(),
-        config.clone(),
+        tx_processor_config,
         tx_pool.clone(),
         epoch_manager.clone(),
         shard_tracker.clone(),
         signer.clone(),
         runtime.clone(),
-        chain_genesis.clone(),
         network_adapter.clone(),
     );
 

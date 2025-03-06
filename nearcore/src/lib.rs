@@ -29,7 +29,7 @@ use near_client::adapter::client_sender_for_network;
 use near_client::gc_actor::GCActor;
 use near_client::{
     ClientActor, ConfigUpdater, PartialWitnessActor, StartClientResult, ViewClientActor,
-    ViewClientActorInner, spawn_tx_request_handler_actor, start_client,
+    ViewClientActorInner, spawn_tx_request_handler_actor, start_client, TxRequestHandlerConfig, 
 };
 use near_epoch_manager::EpochManager;
 use near_epoch_manager::EpochManagerAdapter;
@@ -434,15 +434,19 @@ pub fn start_with_config_and_synchronization(
     );
     shards_manager_adapter.bind(shards_manager_actor.with_auto_span_context());
 
+    let tx_processor_config = TxRequestHandlerConfig {
+        handler_threads: config.client_config.transaction_request_handler_threads,
+        tx_routing_height_horizon: config.client_config.tx_routing_height_horizon,
+        epoch_length: config.client_config.epoch_length,
+        transaction_validity_period: config.genesis.config.transaction_validity_period,
+    };
     let tx_processor_addr = spawn_tx_request_handler_actor(
-        Clock::real(),
-        config.client_config.clone(),
+        tx_processor_config,
         tx_pool,
         view_epoch_manager.clone(),
         view_shard_tracker.clone(),
         config.validator_signer.clone(),
         view_runtime.clone(),
-        chain_genesis.clone(),
         network_adapter.as_multi_sender(),
     );
 

@@ -1,12 +1,9 @@
 use near_async::actix_wrapper::SyncActixWrapper;
 use near_async::messaging::CanSend;
 use near_async::messaging::Handler;
-use near_async::time::Clock;
-use near_chain::Chain;
-use near_chain::ChainGenesis;
+use near_chain::check_transaction_validity_period;
 use near_chain::types::RuntimeAdapter;
 use near_chain::types::Tip;
-use near_chain_configs::ClientConfig;
 use near_chain_configs::MutableValidatorSigner;
 use near_chunks::client::ShardedTransactionPool;
 use near_epoch_manager::EpochManagerAdapter;
@@ -21,13 +18,16 @@ use near_network::types::PeerManagerMessageRequest;
 use near_pool::InsertTransactionResult;
 use near_primitives::stateless_validation::ChunkProductionKey;
 use near_primitives::transaction::SignedTransaction;
+use near_primitives::types::BlockHeightDelta;
 use near_primitives::types::EpochId;
 use near_primitives::types::ShardId;
 use near_primitives::unwrap_or_return;
 use near_primitives::validator_signer::ValidatorSigner;
+use near_store::adapter::chain_store::ChainStoreAdapter;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
+use near_store::adapter::StoreAdapter;
 
 use crate::metrics;
 
@@ -39,46 +39,44 @@ impl Handler<ProcessTxRequest> for TxRequestHandler {
         self.process_tx(transaction, is_forwarded, check_only)
     }
 }
-
+  
 pub fn spawn_tx_request_handler_actor(
-    clock: Clock,
-    config: ClientConfig,
+    config: TxRequestHandlerConfig,
     tx_pool: Arc<Mutex<ShardedTransactionPool>>,
     epoch_manager: Arc<dyn EpochManagerAdapter>,
     shard_tracker: ShardTracker,
     validator_signer: MutableValidatorSigner,
     runtime: Arc<dyn RuntimeAdapter>,
-    chain_genesis: ChainGenesis,
     network_adapter: PeerManagerAdapter,
 ) -> actix::Addr<TxRequestHandlerActor> {
-    actix::SyncArbiter::start(config.transaction_request_handler_threads, move || {
-        let view_client_actor = TxRequestHandler::new(
-            clock.clone(),
+    let actor = TxRequestHandler::new(
             config.clone(),
-            tx_pool.clone(),
-            epoch_manager.clone(),
-            shard_tracker.clone(),
-            validator_signer.clone(),
-            runtime.clone(),
-            chain_genesis.clone(),
-            network_adapter.clone(),
-        )
-        .unwrap();
-        SyncActixWrapper::new(view_client_actor)
+            tx_pool,
+            epoch_manager,
+            shard_tracker,
+            validator_signer,
+            runtime,
+            network_adapter,
+        ).unwrap();
+    actix::SyncArbiter::start(config.handler_threads, move || {
+        SyncActixWrapper::new(actor.clone())
     })
 }
 
 #[derive(Clone)]
-struct TxRequestHandlerConfig {
-    tx_routing_height_horizon: u64,
-    epoch_length: u64,
+pub struct TxRequestHandlerConfig {
+    pub handler_threads: usize,
+    pub tx_routing_height_horizon: u64,
+    pub epoch_length: u64,
+    pub transaction_validity_period: BlockHeightDelta,
 }
 
 /// Accepts `process_tx` requests. Pushes the incoming transactions to the pool.
+#[derive(Clone)]
 pub struct TxRequestHandler {
     config: TxRequestHandlerConfig,
     tx_pool: Arc<Mutex<ShardedTransactionPool>>,
-    chain: Chain,
+    chain_store: ChainStoreAdapter,
     epoch_manager: Arc<dyn EpochManagerAdapter>,
     shard_tracker: ShardTracker,
     validator_signer: MutableValidatorSigner,
@@ -87,37 +85,22 @@ pub struct TxRequestHandler {
 }
 
 impl TxRequestHandler {
-    pub fn new(
-        clock: Clock,
-        config: ClientConfig,
+    pub fn new( 
+        config: TxRequestHandlerConfig,
         tx_pool: Arc<Mutex<ShardedTransactionPool>>,
         epoch_manager: Arc<dyn EpochManagerAdapter>,
         shard_tracker: ShardTracker,
         validator_signer: MutableValidatorSigner,
         runtime: Arc<dyn RuntimeAdapter>,
-        chain_genesis: ChainGenesis,
         network_adapter: PeerManagerAdapter,
     ) -> Result<Self, near_client_primitives::types::Error> {
-        let my_config = TxRequestHandlerConfig {
-            tx_routing_height_horizon: config.tx_routing_height_horizon,
-            epoch_length: config.epoch_length,
-        };
 
-        let chain = Chain::new_for_view_client(
-            clock.clone(),
-            epoch_manager.clone(),
-            shard_tracker.clone(),
-            runtime.clone(),
-            &chain_genesis,
-            near_chain::DoomslugThresholdMode::TwoThirds,
-            config.save_trie_changes,
-        )?;
-
+        let chain_store = runtime.store().chain_store();
         Ok(Self {
-            config: my_config,
+            config,
             tx_pool,
             validator_signer,
-            chain,
+            chain_store,
             epoch_manager,
             runtime,
             shard_tracker,
@@ -151,17 +134,14 @@ impl TxRequestHandler {
         check_only: bool,
         signer: &Option<Arc<ValidatorSigner>>,
     ) -> Result<ProcessTxResponse, near_client_primitives::types::Error> {
-        let head = self.chain.head()?;
+        let head = self.chain_store.head()?;
         let me = signer.as_ref().map(|vs| vs.validator_id());
-        let cur_block = self.chain.get_head_block()?;
+        let cur_block = self.chain_store.get_block(&head.last_block_hash)?;
         let cur_block_header = cur_block.header();
         // here it is fine to use `cur_block_header` as it is a best effort estimate. If the transaction
         // were to be included, the block that the chunk points to will have height >= height of
-        // `cur_block_header`.
-        if let Err(e) = self
-            .chain
-            .chain_store()
-            .check_transaction_validity_period(&cur_block_header, tx.transaction.block_hash())
+        // `cur_block_hesader`. 
+        if let Err(e) = check_transaction_validity_period(&self.chain_store, &cur_block_header, tx.transaction.block_hash(), self.config.transaction_validity_period)
         {
             tracing::debug!(target: "client", ?tx, "Invalid tx: expired or from a different fork");
             return Ok(ProcessTxResponse::InvalidTx(e));
@@ -197,7 +177,7 @@ impl TxRequestHandler {
 
         if cares_about_shard || will_care_about_shard {
             let shard_uid = shard_id_to_uid(self.epoch_manager.as_ref(), shard_id, &epoch_id)?;
-            let state_root = match self.chain.get_chunk_extra(&head.last_block_hash, &shard_uid) {
+            let state_root = match self.chain_store.get_chunk_extra(&head.last_block_hash, &shard_uid) {
                 Ok(chunk_extra) => *chunk_extra.state_root(),
                 Err(_) => {
                     // Not being able to fetch a state root most likely implies that we haven't
@@ -297,7 +277,7 @@ impl TxRequestHandler {
         )?;
         // Use the header head to make sure the list of validators is as
         // up-to-date as possible.
-        let head = self.chain.header_head()?;
+        let head = self.chain_store.header_head()?;
         let maybe_next_epoch_id = self.get_next_epoch_id_if_at_boundary(&head)?;
 
         let mut validators = HashSet::new();
@@ -354,7 +334,7 @@ impl TxRequestHandler {
         shard_id: ShardId,
         signer: &Option<Arc<ValidatorSigner>>,
     ) -> Result<bool, near_client_primitives::types::Error> {
-        let head = self.chain.head()?;
+        let head = self.chain_store.head()?;
         let epoch_id = self.epoch_manager.get_epoch_id_from_prev_block(&head.last_block_hash)?;
 
         let account_id = if let Some(vs) = signer.as_ref() {
@@ -386,7 +366,7 @@ impl TxRequestHandler {
         tx: &SignedTransaction,
         signer: &Option<Arc<ValidatorSigner>>,
     ) -> Result<(), near_client_primitives::types::Error> {
-        let head = self.chain.head()?;
+        let head = self.chain_store.head()?;
         if let Some(next_epoch_id) = self.get_next_epoch_id_if_at_boundary(&head)? {
             self.forward_tx(&next_epoch_id, tx, signer)?;
         } else {
