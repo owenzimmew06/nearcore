@@ -586,6 +586,7 @@ impl RuntimeAdapter for NightshadeRuntime {
             // and therefore skip the check on the nonce upper bound.
             None,
             current_protocol_version,
+            None
         )
         .map(|_vr| ())
     }
@@ -781,6 +782,7 @@ impl RuntimeAdapter for NightshadeRuntime {
                             &cost,
                             Some(next_block_height),
                             protocol_version,
+                            None
                         )
                     })
                     .map(|vr| {
