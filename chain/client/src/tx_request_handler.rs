@@ -8,7 +8,6 @@ use near_chain_configs::MutableValidatorSigner;
 use near_chunks::client::ShardedTransactionPool;
 use near_epoch_manager::EpochManagerAdapter;
 use near_epoch_manager::shard_assignment::account_id_to_shard_id;
-use near_epoch_manager::shard_assignment::shard_id_to_uid;
 use near_epoch_manager::shard_tracker::ShardTracker;
 use near_network::client::ProcessTxRequest;
 use near_network::client::ProcessTxResponse;
@@ -121,7 +120,7 @@ impl TxRequestHandler {
         let signer = self.validator_signer.get();
         unwrap_or_return!(self.process_tx_internal(&tx, is_forwarded, check_only, &signer), {
             let me = signer.as_ref().map(|signer| signer.validator_id());
-            tracing::warn!(target: "client", ?me, ?tx, "Dropping tx");
+            tracing::debug!(target: "client", ?me, ?tx, "Dropping tx");
             ProcessTxResponse::NoResponse
         })
     }
@@ -140,7 +139,7 @@ impl TxRequestHandler {
         let cur_block_header = cur_block.header();
         // here it is fine to use `cur_block_header` as it is a best effort estimate. If the transaction
         // were to be included, the block that the chunk points to will have height >= height of
-        // `cur_block_hesader`. 
+        // `cur_block_header`.
         if let Err(e) = check_transaction_validity_period(&self.chain_store, &cur_block_header, tx.transaction.block_hash(), self.config.transaction_validity_period)
         {
             tracing::debug!(target: "client", ?tx, "Invalid tx: expired or from a different fork");
@@ -148,44 +147,37 @@ impl TxRequestHandler {
         }
         let gas_price = cur_block_header.next_gas_price();
         let epoch_id = self.epoch_manager.get_epoch_id_from_prev_block(&head.last_block_hash)?;
-        let shard_layout = self.runtime.get_shard_layout(&epoch_id)?;
-        let receiver_shard = account_id_to_shard_id(
-            self.epoch_manager.as_ref(),
-            tx.transaction.receiver_id(),
-            &epoch_id,
-        )?;
+        let shard_layout = self.epoch_manager.get_shard_layout(&epoch_id)?;
+        let receiver_shard = shard_layout.account_id_to_shard_id(tx.transaction.receiver_id());
         let receiver_congestion_info =
             cur_block.block_congestion_info().get(&receiver_shard).copied();
         let protocol_version = self.epoch_manager.get_epoch_protocol_version(&epoch_id)?;
 
-        if let Err(err) =
-            self.runtime.validate_tx(&shard_layout, tx, protocol_version, receiver_congestion_info)
-        {
+        if let Err(err) = self.runtime.validate_tx(
+            &shard_layout,
+            tx,
+            protocol_version,
+            receiver_congestion_info,
+        ) {
             tracing::debug!(target: "client", tx_hash = ?tx.get_hash(), ?err, "Invalid tx during basic validation");
             return Ok(ProcessTxResponse::InvalidTx(err));
         }
 
-        let shard_id = account_id_to_shard_id(
-            self.epoch_manager.as_ref(),
-            tx.transaction.signer_id(),
-            &epoch_id,
-        )?;
+        let shard_uid = shard_layout.account_id_to_shard_uid(tx.transaction.signer_id());
+        let shard_id = shard_uid.shard_id();
         let cares_about_shard =
             self.shard_tracker.cares_about_shard(me, &head.last_block_hash, shard_id, true);
         let will_care_about_shard =
             self.shard_tracker.will_care_about_shard(me, &head.last_block_hash, shard_id, true);
 
         if cares_about_shard || will_care_about_shard {
-            let shard_uid = shard_id_to_uid(self.epoch_manager.as_ref(), shard_id, &epoch_id)?;
             let state_root = match self.chain_store.get_chunk_extra(&head.last_block_hash, &shard_uid) {
                 Ok(chunk_extra) => *chunk_extra.state_root(),
                 Err(_) => {
                     // Not being able to fetch a state root most likely implies that we haven't
                     //     caught up with the next epoch yet.
                     if is_forwarded {
-                        return Err(near_client_primitives::types::Error::Other(
-                            "Node has not caught up yet".to_string(),
-                        ));
+                        return Err(near_client_primitives::types::Error::Other("Node has not caught up yet".to_string()));
                     } else {
                         self.forward_tx(&epoch_id, tx, signer)?;
                         return Ok(ProcessTxResponse::RequestRouted);
@@ -208,7 +200,8 @@ impl TxRequestHandler {
             // Transactions only need to be recorded if the node is a validator.
             if me.is_some() {
                 let mut pool = self.tx_pool.lock().unwrap();
-                match pool.insert_transaction(shard_uid, tx.clone()) {
+                match pool.insert_transaction(shard_uid, tx.clone())
+                {
                     InsertTransactionResult::Success => {
                         tracing::trace!(target: "client", ?shard_uid, tx_hash = ?tx.get_hash(), "Recorded a transaction.");
                     }
