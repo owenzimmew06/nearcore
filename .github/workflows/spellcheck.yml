@@ -1,0 +1,30 @@
+name: Spell Check
+
+# When to run the spell check
+on:
+  push:
+    branches: [ main ]  # Runs on pushes to the main branch
+  pull_request:
+    branches: [ main ]  # Runs on pull requests targeting the main branch
+
+jobs:
+  spellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      # Check out your repository code
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Set up Node.js (required for cspell)
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '16'  # Use a version compatible with cspell
+
+      # Install cspell globally
+      - name: Install cspell
+        run: npm install -g cspell
+
+      # Run the spell check on all files (customize the pattern as needed)
+      - name: Run spell check
+        run: cspell "**/*.{md,txt,js,py}" --no-summary
